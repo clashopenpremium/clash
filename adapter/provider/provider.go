@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"runtime"
 	"time"
@@ -231,5 +232,137 @@ func NewCompatibleProvider(name string, proxies []C.Proxy, hc *HealthCheck) (*Co
 
 	wrapper := &CompatibleProvider{pd}
 	runtime.SetFinalizer(wrapper, stopCompatibleProvider)
+	return wrapper, nil
+}
+
+type RuleSetSchema struct {
+	Payload []string `yaml:"payload"`
+}
+
+// for auto gc
+type RuleSetProvider struct {
+	*ruleSetProvider
+}
+
+type ruleSetProvider struct {
+	*fetcher
+	payload  []string
+	ipcidrs  []*net.IPNet
+	adapter  string
+	behavior types.RuleType
+}
+
+func (rp *ruleSetProvider) Initial() error {
+	elm, err := rp.fetcher.Initial()
+	if err != nil {
+		return err
+	}
+
+	rp.onUpdate(elm)
+	return nil
+}
+
+func (rp *ruleSetProvider) Type() types.ProviderType {
+	return types.Rule
+}
+
+func (rp *ruleSetProvider) RuleType() C.RuleType {
+	return C.RuleSet
+}
+
+func (rp *ruleSetProvider) Update() error {
+	elm, same, err := rp.fetcher.Update()
+	if err == nil && !same {
+		rp.onUpdate(elm)
+	}
+	return err
+}
+
+func (rp *ruleSetProvider) Behavior() types.RuleType {
+	return rp.behavior
+}
+
+func (rp *ruleSetProvider) Match(metadata *C.Metadata) bool {
+	// TODO Perf optimize
+	// TODO Support domain match
+	for _, ipcidr := range rp.ipcidrs {
+		if ipcidr.Contains(metadata.DstIP) {
+			return true
+		}
+	}
+	return false
+}
+
+func (rp *ruleSetProvider) AsRule(adaptor string) C.Rule {
+	rp.adapter = adaptor
+	return rp
+}
+
+func (rp *ruleSetProvider) Adapter() string {
+	return rp.adapter
+}
+
+func (rp *ruleSetProvider) Payload() string {
+	return rp.payload[0]
+}
+
+func (rp *ruleSetProvider) ShouldResolveIP() bool {
+	return false
+}
+
+func (rp *ruleSetProvider) ShouldFindProcess() bool {
+	return false
+}
+
+func (rp *ruleSetProvider) setPayload(payload []string) {
+	rp.payload = payload
+
+	// TODO support domain
+	if rp.behavior == types.IPCIDR {
+		for _, ips := range payload {
+			_, ipnet, _ := net.ParseCIDR(ips)
+			rp.ipcidrs = append(rp.ipcidrs, ipnet)
+		}
+	}
+}
+
+func stopRuleProvider(rp *RuleSetProvider) {
+	rp.fetcher.Destroy()
+}
+
+func NewRuleSetProvider(name string, interval time.Duration, vehicle types.Vehicle, behavior types.RuleType) (*RuleSetProvider, error) {
+	rp := &ruleSetProvider{
+		payload:  []string{},
+		behavior: behavior,
+	}
+
+	onUpdate := func(elm any) {
+		ret := elm.([]string)
+		rp.setPayload(ret)
+	}
+
+	parsePayload := func(buf []byte) (any, error) {
+		schema := &RuleSetSchema{}
+
+		if err := yaml.Unmarshal(buf, schema); err != nil {
+			return nil, err
+		}
+
+		if schema.Payload == nil {
+			return nil, errors.New("file must have a `payload` field")
+		}
+
+		if len(schema.Payload) == 0 {
+			return nil, errors.New("payload is empty")
+		}
+
+		return schema.Payload, nil
+	}
+
+	fetcher := newFetcher(name, interval, vehicle, parsePayload, onUpdate)
+	rp.fetcher = fetcher
+
+	wrapper := &RuleSetProvider{rp}
+	runtime.SetFinalizer(wrapper, stopRuleProvider)
 	return wrapper, nil
 }

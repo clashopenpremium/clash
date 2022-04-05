@@ -12,6 +12,7 @@ const (
 	DstPort
 	Process
 	ProcessPath
+	RuleSet
 	MATCH
 )
 
@@ -39,6 +40,8 @@ func (rt RuleType) String() string {
 		return "Process"
 	case ProcessPath:
 		return "ProcessPath"
+	case RuleSet:
+		return "RuleSet"
 	case MATCH:
 		return "Match"
 	default:
