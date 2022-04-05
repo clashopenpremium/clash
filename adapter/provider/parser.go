@@ -28,6 +28,14 @@ type proxyProviderSchema struct {
 	HealthCheck healthCheckSchema `provider:"health-check,omitempty"`
 }
 
+type ruleProviderSchema struct {
+	Type     string `provider:"type"`
+	Path     string `provider:"path"`
+	URL      string `provider:"url"`
+	Interval int    `provider:"interval"`
+	Behavior string `provider:"behavior"`
+}
+
 func ParseProxyProvider(name string, mapping map[string]any) (types.ProxyProvider, error) {
 	decoder := structure.NewDecoder(structure.Option{TagName: "provider", WeaklyTypedInput: true})
 
@@ -61,4 +69,38 @@ func ParseProxyProvider(name string, mapping map[string]any) (types.ProxyProvide
 	interval := time.Duration(uint(schema.Interval)) * time.Second
 	filter := schema.Filter
 	return NewProxySetProvider(name, interval, filter, vehicle, hc)
+}
+
+func ParseRuleProvider(name string, mapping map[string]any) (types.RuleProvider, error) {
+	decoder := structure.NewDecoder(structure.Option{TagName: "provider", WeaklyTypedInput: true})
+
+	schema := &ruleProviderSchema{}
+
+	if err := decoder.Decode(mapping, schema); err != nil {
+		return nil, err
+	}
+
+	path := C.Path.Resolve(schema.Path)
+
+	var vehicle types.Vehicle
+	switch schema.Type {
+	case "file":
+		vehicle = NewFileVehicle(path)
+	case "http":
+		vehicle = NewHTTPVehicle(schema.URL, path)
+	default:
+		return nil, fmt.Errorf("%w: %s", errVehicleType, schema.Type)
+	}
+
+	interval := time.Duration(uint(schema.Interval)) * time.Second
+	var behavior types.RuleType
+	switch schema.Behavior {
+	case "domain":
+		behavior = types.Domain
+	case "ipcidr":
+		behavior = types.IPCIDR
+	default:
+		return nil, fmt.Errorf("Unknown rule set bahavior: %s", schema.Behavior)
+	}
+	return NewRuleSetProvider(name, interval, vehicle, behavior)
 }

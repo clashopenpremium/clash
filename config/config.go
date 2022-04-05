@@ -141,6 +141,7 @@ type RawConfig struct {
 	RoutingMark        int          `yaml:"routing-mark"`
 
 	ProxyProvider map[string]map[string]any `yaml:"proxy-providers"`
+	RuleProvider  map[string]map[string]any `yaml:"rule-providers"`
 	Hosts         map[string]string         `yaml:"hosts"`
 	DNS           RawDNS                    `yaml:"dns"`
 	Experimental  Experimental              `yaml:"experimental"`
@@ -381,9 +382,37 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	return proxies, providersMap, nil
 }
 
+func parseRuleProviders(cfg *RawConfig) (ruleProvidersMap map[string]providerTypes.RuleProvider, err error) {
+	ruleProvidersConfig := cfg.RuleProvider
+	ruleProvidersMap = make(map[string]providerTypes.RuleProvider)
+
+	for name, mapping := range ruleProvidersConfig {
+		ruleProvider, err := provider.ParseRuleProvider(name, mapping)
+		if err != nil {
+			return nil, err
+		}
+
+		ruleProvidersMap[name] = ruleProvider
+	}
+
+	for _, provider := range ruleProvidersMap {
+		log.Infoln("Start initial rule provider %s", provider.Name())
+		if err := provider.Initial(); err != nil {
+			return nil, fmt.Errorf("initial proxy rule provider %s error: %w", provider.Name(), err)
+		}
+	}
+
+	return ruleProvidersMap, nil
+}
+
 func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
 	rules := []C.Rule{}
 	rulesConfig := cfg.Rule
+
+	ruleProviders, err := parseRuleProviders(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	// parse rules
 	for idx, line := range rulesConfig {
@@ -415,12 +444,17 @@ func parseRules(cfg *RawConfig, proxies map[string]C.Proxy) ([]C.Rule, error) {
 		rule = trimArr(rule)
 		params = trimArr(params)
 
-		parsed, parseErr := R.ParseRule(rule[0], payload, target, params)
-		if parseErr != nil {
-			return nil, fmt.Errorf("rules[%d] [%s] error: %s", idx, line, parseErr.Error())
-		}
+		if rule[0] == "RULE-SET" {
+			log.Debugln("Adding rule set %s", payload)
+			rules = append(rules, ruleProviders[payload].AsRule(target))
+		} else {
+			parsed, parseErr := R.ParseRule(rule[0], payload, target, params)
+			if parseErr != nil {
+				return nil, fmt.Errorf("rules[%d] [%s] error: %s", idx, line, parseErr.Error())
+			}
 
-		rules = append(rules, parsed)
+			rules = append(rules, parsed)
+		}
 	}
 
 	return rules, nil
