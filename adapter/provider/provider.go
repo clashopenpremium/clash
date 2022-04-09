@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Dreamacro/clash/adapter"
+	"github.com/Dreamacro/clash/component/trie"
 	C "github.com/Dreamacro/clash/constant"
 	types "github.com/Dreamacro/clash/constant/provider"
 
@@ -246,10 +247,11 @@ type RuleSetProvider struct {
 
 type ruleSetProvider struct {
 	*fetcher
-	payload  []string
-	ipcidrs  []*net.IPNet
-	adapter  string
-	behavior types.RuleType
+	payload    []string
+	ipcidrs    []*net.IPNet
+	domainTrie *trie.DomainTrie
+	adapter    string
+	behavior   types.RuleType
 }
 
 func (rp *ruleSetProvider) Initial() error {
@@ -283,10 +285,14 @@ func (rp *ruleSetProvider) Behavior() types.RuleType {
 }
 
 func (rp *ruleSetProvider) Match(metadata *C.Metadata) bool {
-	// TODO Perf optimize
-	// TODO Support domain match
-	for _, ipcidr := range rp.ipcidrs {
-		if ipcidr.Contains(metadata.DstIP) {
+	if rp.behavior == types.IPCIDR {
+		for _, ipcidr := range rp.ipcidrs {
+			if ipcidr.Contains(metadata.DstIP) {
+				return true
+			}
+		}
+	} else if rp.behavior == types.Domain {
+		if rp.domainTrie.Search(metadata.Host) != nil {
 			return true
 		}
 	}
@@ -317,11 +323,12 @@ func (rp *ruleSetProvider) ShouldFindProcess() bool {
 func (rp *ruleSetProvider) setPayload(payload []string) {
 	rp.payload = payload
 
-	// TODO support domain
-	if rp.behavior == types.IPCIDR {
-		for _, ips := range payload {
-			_, ipnet, _ := net.ParseCIDR(ips)
+	for _, payloadEntry := range payload {
+		if rp.behavior == types.IPCIDR {
+			_, ipnet, _ := net.ParseCIDR(payloadEntry)
 			rp.ipcidrs = append(rp.ipcidrs, ipnet)
+		} else if rp.behavior == types.Domain {
+			rp.domainTrie.Insert(payloadEntry, true)
 		}
 	}
 }
@@ -332,8 +339,10 @@ func stopRuleProvider(rp *RuleSetProvider) {
 
 func NewRuleSetProvider(name string, interval time.Duration, vehicle types.Vehicle, behavior types.RuleType) (*RuleSetProvider, error) {
 	rp := &ruleSetProvider{
-		payload:  []string{},
-		behavior: behavior,
+		payload:    []string{},
+		ipcidrs:    []*net.IPNet{},
+		domainTrie: trie.New(),
+		behavior:   behavior,
 	}
 
 	onUpdate := func(elm any) {
