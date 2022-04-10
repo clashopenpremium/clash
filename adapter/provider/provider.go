@@ -247,6 +247,7 @@ type RuleSetProvider struct {
 
 type ruleSetProvider struct {
 	*fetcher
+	name       string
 	payload    []string
 	ipcidrs    []*net.IPNet
 	domainTrie *trie.DomainTrie
@@ -309,7 +310,7 @@ func (rp *ruleSetProvider) Adapter() string {
 }
 
 func (rp *ruleSetProvider) Payload() string {
-	return rp.payload[0]
+	return rp.name
 }
 
 func (rp *ruleSetProvider) ShouldResolveIP() bool {
@@ -339,6 +340,7 @@ func stopRuleProvider(rp *RuleSetProvider) {
 
 func NewRuleSetProvider(name string, interval time.Duration, vehicle types.Vehicle, behavior types.RuleType) (*RuleSetProvider, error) {
 	rp := &ruleSetProvider{
+		name:       name,
 		payload:    []string{},
 		ipcidrs:    []*net.IPNet{},
 		domainTrie: trie.New(),
